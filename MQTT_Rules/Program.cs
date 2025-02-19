@@ -4,6 +4,8 @@ using NLog;
 using MQTT_Rules.Rule;
 using Newtonsoft.Json;
 using MQTT_Rules.FirebaseTools;
+using System.Runtime.InteropServices;
+using System.Data;
 
 namespace MQTT_Rules
 {
@@ -67,12 +69,9 @@ namespace MQTT_Rules
 								$"SECRET_FIREBASE = [{SECRET_FIREBASE}]\n\r" +
 								$"ID_FIRESTORE = [{ID_FIRESTORE}]\n\r" +
 								$"PATH_FIRESTORE = [{PATH_FIRESTORE}]";
-
-			loadRules(filePathFirebaseRules, AddRuleFirebase);
-			loadRules(filePathFirestoreRules, AddRuleFirestore);
 		}
 
-		private void loadRules(string path, Action<string, string, bool> AddRule)
+		private static void loadRules(string path, Action<string, string, bool> AddRule)
 		{
 			if (File.Exists(path))
 			{
@@ -92,61 +91,81 @@ namespace MQTT_Rules
 			}
 		}
 
-		private FirebaseService firebaseService = new FirebaseService("", "");
-		private MqttBrokerClient mqttReciverClientFirebase = new MqttBrokerClient("", 0, "", "");
-		private Dictionary<string, string> subscriptionsFirebase = new Dictionary<string, string>();
+		private static FirebaseService? firebaseService = null;
+		private static MqttBrokerClient? mqttReciverClientFirebase = null;
+		private static Dictionary<string, string> subscriptionsFirebase = new Dictionary<string, string>();
 
-		private FirestoreService firestoreService = new FirestoreService("", "");
-		private MqttBrokerClient mqttReciverClientFirestore = new MqttBrokerClient("", 0, "", "");
-		static async Task Main(string[] args)
+		private static FirestoreService? firestoreService = null;
+		private static MqttBrokerClient? mqttReciverClientFirestore = null;
+		static void Main(string[] args)
 		{
+			logger.Info("Start MQTT Rules.");
+
 			Program p = new Program();
+			p.initConfig();
+
+			logger.Info(p.configTextDefault);
+
+			firebaseService = new FirebaseService(p.URL_FIREBASE, p.SECRET_FIREBASE);
+			mqttReciverClientFirebase = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
+
+			firestoreService = new FirestoreService(p.ID_FIRESTORE, p.PATH_FIRESTORE);
+			mqttReciverClientFirestore = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
+
+			logger.Info("All done!");
+
 			try
 			{
-				p.initConfig();
+				AppDomain.CurrentDomain.ProcessExit += OnProcessExit; // Для ProcessExit
+				Console.CancelKeyPress += OnCancelKeyPress;          // Для Ctrl+C (SIGINT)
+
+				// Подписываемся на SIGTERM (только для Linux)
+				if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+				{
+					UnixSignalHandler.Register(Signum.SIGTERM, OnSigTerm);
+				}
 
 				//MQTTReciverFirebase
-				await Task.Run(() =>
+				mqttReciverClientFirebase.Connect();
+				loadRules(filePathFirebaseRules, AddRuleFirebase);
+				logger.Info("MQTT Reciver for Firebase is ready");
+				Task.Run(() =>
 				{
-					p.mqttReciverClientFirebase = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
-					p.mqttReciverClientFirebase.Connect();
-					logger.Info("MQTT Reciver for Firebase is ready");
-					p.mqttReciverClientFirebase.MessageReceived += async (senderMQTT, eMQTT) =>
+					mqttReciverClientFirebase.MessageReceived += async (senderMQTT, eMQTT) =>
 					{
 						logger.Info($"Message recived: Topic: [{eMQTT.Topic}] Message: [{eMQTT.Payload}]");
 
 						RuleControl? rule;
-						lock (p.ruleControlsFirebase)
+						lock (ruleControlsFirebase)
 						{
-							List<RuleControl> rules = p.ruleControlsFirebase.Where(r => r.Direction == true).ToList();
+							List<RuleControl> rules = ruleControlsFirebase.Where(r => r.Direction == true).ToList();
 							rule = rules.FirstOrDefault(r => r.MQTT_topic == eMQTT.Topic);
 						}
 
 						if (rule != null && eMQTT.Payload != null)
-							await p.firebaseService.UpdateDataAsync<string>(rule.FirebaseReference, eMQTT.Payload);
+							await firebaseService.UpdateDataAsync<string>(rule.FirebaseReference, eMQTT.Payload);
 					};
 				});
-
+				
 				//Firebase
-				p.firebaseService = new FirebaseService(p.URL_FIREBASE, p.SECRET_FIREBASE);
-				await Task.Run(async () =>
+				Task.Run(async () =>
 				{
 					while (true)
 					{
 						List<RuleControl> rules;
-						lock (p.ruleControlsFirebase)
+						lock (ruleControlsFirebase)
 						{
-							rules = p.ruleControlsFirebase.Where(r => r.Direction == false).ToList(); // Создаём копию списка
+							rules = ruleControlsFirebase.Where(r => r.Direction == false).ToList(); // Создаём копию списка
 						}
 						foreach (RuleControl rule in rules)
 						{
-							string firebaseData = await p.firebaseService.GetDataAsync<string>(rule.FirebaseReference);
-							if (!p.subscriptionsFirebase.TryGetValue(rule.FirebaseReference, out string? oldValue) || oldValue != firebaseData)
+							string firebaseData = await firebaseService.GetDataAsync<string>(rule.FirebaseReference);
+							if (!subscriptionsFirebase.TryGetValue(rule.FirebaseReference, out string? oldValue) || oldValue != firebaseData)
 							{
 								logger.Info($"Message recived: Firebase path: [{rule.FirebaseReference}] Message: [{firebaseData}]");
 
-								p.subscriptionsFirebase[rule.FirebaseReference] = firebaseData;
-								p.mqttReciverClientFirebase.Publish(rule.MQTT_topic, firebaseData);
+								subscriptionsFirebase[rule.FirebaseReference] = firebaseData;
+								mqttReciverClientFirebase.Publish(rule.MQTT_topic, firebaseData);
 							}
 						}
 
@@ -155,19 +174,19 @@ namespace MQTT_Rules
 				});
 
 				//MQTTReciverFirestore
-				await Task.Run(() =>
+				mqttReciverClientFirestore.Connect();
+				loadRules(filePathFirestoreRules, AddRuleFirestore);
+				logger.Info("MQTT Reciver for Firestore is ready");
+				Task.Run(() =>
 				{
-					p.mqttReciverClientFirestore = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
-					p.mqttReciverClientFirestore.Connect();
-					logger.Info("MQTT Reciver for Firestore is ready");
-					p.mqttReciverClientFirestore.MessageReceived += async (senderMQTT, eMQTT) =>
+					mqttReciverClientFirestore.MessageReceived += async (senderMQTT, eMQTT) =>
 					{
 						logger.Info($"Message recived: Topic: [{eMQTT.Topic}] Message: [{eMQTT.Payload}]");
 
 						RuleControl? rule;
-						lock (p.ruleControlsFirebase)
+						lock (ruleControlsFirebase)
 						{
-							List<RuleControl> rules = p.ruleControlsFirestore.Where(r => r.Direction == true).ToList();
+							List<RuleControl> rules = ruleControlsFirestore.Where(r => r.Direction == true).ToList();
 							rule = rules.FirstOrDefault(r => r.MQTT_topic == eMQTT.Topic);
 						}
 
@@ -178,66 +197,40 @@ namespace MQTT_Rules
 							{
 								{ path.Field, eMQTT.Payload }
 							};
-							await p.firestoreService.UpdateDataAsync(path, updates);
+							await firestoreService.UpdateDataAsync(path, updates);
 						}
 					};
 				});
-
-				////Firestore
-				//if (!string.IsNullOrEmpty(ID_FIRESTORE) && !string.IsNullOrEmpty(PATH_FIRESTORE))
-				//{
-				//	firestoreService = new FirestoreService(ID_FIRESTORE, PATH_FIRESTORE);
-				//	Task.Run(async () =>
-				//	{
-				//		while (true && !disconnect)
-				//		{
-				//			if (switcherFirestore)
-				//			{
-				//				List<RuleControl> rules;
-				//				lock (ruleControlsFirestore)
-				//				{
-				//					rules = ruleControlsFirestore.Where(r => r.Direction == false).ToList(); // Создаём копию списка
-				//				}
-				//				foreach (RuleControl rule in rules)
-				//				{
-				//					FirestorePath path = new FirestorePath(rule.FirebaseReference);
-				//					string firestoreData = await firestoreService.GetFieldAsync<string>(path);
-				//					if (!subscriptionsFirestore.TryGetValue(rule.FirebaseReference, out string oldValue) || oldValue != firestoreData)
-				//					{
-				//						string postString = Properties.Resources.notification_string + $"Firestore path: [{rule.FirebaseReference}] Message: [{firestoreData}]";
-				//						logger.Info(postString);
-
-				//						subscriptionsFirestore[rule.FirebaseReference] = firestoreData;
-				//						mqttBrokerClient.Publish(rule.MQTT_topic, firestoreData);
-				//					}
-				//				}
-
-				//				await Task.Delay(3000);
-				//			}
-				//		}
-				//	});
-				//}
 
 				//Firestore
-				p.firestoreService = new FirestoreService(p.ID_FIRESTORE, p.PATH_FIRESTORE);
-				await Task.Run(() =>
+				Task.Run(() =>
 				{
-					p.firestoreService.OnMessage += (senderFirestore, eFirestore) =>
+					firestoreService.OnMessage += (senderFirestore, eFirestore) =>
 					{
-						logger.Info($"Message recived: Firebase path: [{eFirestore.Path.SourcePath}] Message: [{eFirestore.Data.ToString()}]");
-
-						List<RuleControl> rules;
-						lock (p.ruleControlsFirestore)
+						if (eFirestore.Path != null && eFirestore.Data != null)
 						{
-							rules = p.ruleControlsFirestore.Where(r => r.Direction == false).ToList(); // Создаём копию списка
+							logger.Info($"Message recived: Firestore path: [{eFirestore.Path.SourcePath}] Message: [{eFirestore.Data.ToString()}]");
+
+							List<RuleControl> rules;
+							lock (ruleControlsFirestore)
+							{
+								rules = ruleControlsFirestore.Where(r => r.Direction == false).ToList(); // Создаём копию списка
+							}
+							RuleControl? rule = rules.FirstOrDefault(r => r.FirebaseReference == eFirestore.Path.SourcePath);
+
+							if (rule != null)
+								mqttReciverClientFirestore.Publish(rule.MQTT_topic, eFirestore.Data.ToString()!);
 						}
-						RuleControl? rule = rules.FirstOrDefault(r => r.FirebaseReference == eFirestore.Path.SourcePath);
-
-						if (rule != null && eFirestore.Data != null)
-							p.mqttReciverClientFirestore.Publish(rule.MQTT_topic, eFirestore.Data.ToString()!);
-
 					};
 				});
+
+				//Task.Run(async () =>
+				//{
+				//	while (true)
+				//	{
+				//		await Task.Delay(5000);
+				//	}
+				//});
 			}
 			catch (Exception ex)
 			{
@@ -248,24 +241,143 @@ namespace MQTT_Rules
 
 		//----------------------------------------------------- FIREBASE RULES -----------------------------------------------------
 
-		private List<RuleControl> ruleControlsFirebase = new List<RuleControl>();
-		private void AddRuleFirebase(string FirebaseReference, string MQTT_topic, bool Direction)
+		private static List<RuleControl> ruleControlsFirebase = new List<RuleControl>();
+		private static void AddRuleFirebase(string FirebaseReference, string MQTT_topic, bool Direction)
 		{
 			// Создаем новый элемент управления
 			RuleControl ruleControl = new RuleControl(FirebaseReference, MQTT_topic, Direction);
 			// Добавляем его в список для управления
 			ruleControlsFirebase.Add(ruleControl);
+
+			if (mqttReciverClientFirebase != null && firestoreService != null)
+			{
+				if (ruleControl.Direction)
+					mqttReciverClientFirebase.Subscribe(ruleControl.MQTT_topic);
+
+				logger.Info($"Activate rule: [{ruleControl.FirebaseReference}] {(ruleControl.Direction ? "<" : ">")} [{ruleControl.MQTT_topic}].");
+			}
 		}
 
 		//----------------------------------------------------- FIRESTORE RULES -----------------------------------------------------
 
-		private List<RuleControl> ruleControlsFirestore = new List<RuleControl>();
-		private void AddRuleFirestore(string FirestoreReference, string MQTT_topic, bool Direction)
+		private static List<RuleControl> ruleControlsFirestore = new List<RuleControl>();
+		private static void AddRuleFirestore(string FirestoreReference, string MQTT_topic, bool Direction)
 		{
 			// Создаем новый элемент управления
 			RuleControl ruleControl = new RuleControl(FirestoreReference, MQTT_topic, Direction);
 			// Добавляем его в список для управления
 			ruleControlsFirestore.Add(ruleControl);
+
+			if (mqttReciverClientFirestore != null && firestoreService != null)
+			{
+				mqttReciverClientFirestore.Subscribe(ruleControl.MQTT_topic);
+
+				if (ruleControl.Direction)
+					mqttReciverClientFirestore.Subscribe(ruleControl.MQTT_topic);
+				else
+					firestoreService.Subscribe(new FirestorePath(ruleControl.FirebaseReference));
+
+				logger.Info($"Activate rule: [{ruleControl.FirebaseReference}] {(ruleControl.Direction ? "<" : ">")} [{ruleControl.MQTT_topic}].");
+			}
+		}
+
+		//----------------------------------------------------- SYSTEM -----------------------------------------------------
+
+		private static void DisconnectAll()
+		{
+			if (mqttReciverClientFirebase != null && mqttReciverClientFirestore != null && firestoreService != null)
+			{
+				if (mqttReciverClientFirebase.IsConnected() && mqttReciverClientFirestore.IsConnected())
+				{
+					foreach (RuleControl rule in ruleControlsFirebase)
+					{
+						mqttReciverClientFirebase.Unsubscribe(rule.MQTT_topic);
+					}
+					foreach (RuleControl rule in ruleControlsFirestore)
+					{
+						mqttReciverClientFirestore.Unsubscribe(rule.MQTT_topic);
+					}
+					firestoreService.UnsubscribeAll();
+
+					mqttReciverClientFirebase.Disconnect();
+					mqttReciverClientFirestore.Disconnect();
+				}
+			}
+		}
+
+		private static bool _isExiting = false; // Флаг для отслеживания состояния завершения
+		private static readonly object _lock = new object(); // Объект для блокировки
+		private static void OnProcessExit(object? sender, EventArgs e)
+		{
+			lock (_lock)
+			{
+				if (_isExiting) return; // Если уже завершаемся, выходим
+				_isExiting = true; // Устанавливаем флаг
+			}
+
+			logger.Info("Обработчик ProcessExit: завершение работы...");
+
+			try
+			{
+				DisconnectAll();
+			}
+			catch (Exception ex)
+			{
+				logger.Error($"Ошибка завершения работы: {ex.Message}");
+			}
+			finally
+			{
+				Environment.Exit(0); // Завершаем программу
+			}
+		}
+
+		private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+		{
+			lock (_lock)
+			{
+				if (_isExiting) return; // Если уже завершаемся, выходим
+				_isExiting = true; // Устанавливаем флаг
+			}
+
+			logger.Info("Обработчик Ctrl+C (SIGINT): завершение работы...");
+			e.Cancel = true; // Предотвращаем завершение процесса по умолчанию
+
+			try
+			{
+				DisconnectAll();
+			}
+			catch (Exception ex)
+			{
+				logger.Error($"Ошибка завершения работы: {ex.Message}");
+			}
+			finally
+			{
+				Environment.Exit(0); // Завершаем программу
+			}
+		}
+
+		private static void OnSigTerm()
+		{
+			lock (_lock)
+			{
+				if (_isExiting) return; // Если уже завершаемся, выходим
+				_isExiting = true; // Устанавливаем флаг
+			}
+
+			logger.Info("Обработчик SIGTERM: завершение работы...");
+
+			try
+			{
+				DisconnectAll();
+			}
+			catch (Exception ex)
+			{
+				logger.Error($"Ошибка завершения работы: {ex.Message}");
+			}
+			finally
+			{
+				Environment.Exit(0); // Завершаем программу
+			}
 		}
 	}
 }

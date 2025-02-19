@@ -36,4 +36,4 @@ echo "[]" > rulesFirebase.json
 echo "[]" > rulesFirestore.json
 
 # ¬ывод сообщени€ об успешном завершении
-echo "Files config.ini, rulesFirebase.json и rulesFirestore.json created."
+echo "Files config.ini, rulesFirebase.json and rulesFirestore.json created."

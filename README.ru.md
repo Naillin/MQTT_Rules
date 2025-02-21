@@ -48,3 +48,7 @@ sudo systemctl stop mqtt-rules.service
 ## Лицензия
 
 MIT License.
+
+## Донат
+
+https://boosty.to/naillin/donate

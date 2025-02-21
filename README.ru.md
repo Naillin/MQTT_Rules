@@ -51,4 +51,4 @@ MIT License.
 
 ## Донат
 
-https://boosty.to/naillin/donate
+[Спасибо большое!❤️](https://boosty.to/naillin/donate)

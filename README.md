@@ -48,3 +48,7 @@ This snippet demonstrates the creation of a group of rules that implement synchr
 ## License
 
 MIT License.
+
+## Donate
+
+https://boosty.to/naillin/donate

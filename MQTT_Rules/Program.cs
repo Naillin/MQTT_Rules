@@ -71,7 +71,7 @@ namespace MQTT_Rules
 								$"PATH_FIRESTORE = [{PATH_FIRESTORE}]";
 		}
 
-		private static void loadRules(string path, Action<string, string, bool> AddRule)
+		private static void loadRules(string path, Action<string, string, bool, bool, bool> AddRule)
 		{
 			if (File.Exists(path))
 			{
@@ -81,7 +81,7 @@ namespace MQTT_Rules
 				{
 					foreach (RuleUnit rule in jsonRules)
 					{
-						AddRule(rule.FirebaseReference, rule.MQTT_topic, rule.Direction);
+						AddRule(rule.FirebaseReference, rule.MQTT_topic, rule.Direction, rule.NewField, rule.Timestamp);
 					}
 				}
 			}
@@ -94,9 +94,11 @@ namespace MQTT_Rules
 		private static FirebaseService? firebaseService = null;
 		private static MqttBrokerClient? mqttReciverClientFirebase = null;
 		private static Dictionary<string, string> subscriptionsFirebase = new Dictionary<string, string>();
+		private static Dictionary<string, int> countFiledsFirebase = new Dictionary<string, int>();
 
 		private static FirestoreService? firestoreService = null;
 		private static MqttBrokerClient? mqttReciverClientFirestore = null;
+		private static Dictionary<string, int> countFiledsFirestore = new Dictionary<string, int>();
 		static void Main(string[] args)
 		{
 			logger.Info("Start MQTT Rules.");
@@ -142,7 +144,37 @@ namespace MQTT_Rules
 							}
 
 							if (rule != null && eMQTT.Payload != null)
-								await firebaseService.UpdateDataAsync<string>(rule.FirebaseReference, eMQTT.Payload);
+							{
+								string data = eMQTT.Payload;
+								if (rule.Timestamp)
+								{
+									data = data.Split('|')[0];
+									data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+								}
+
+								string fbRef = rule.FirebaseReference;
+								string lastElement = fbRef.TrimEnd('/').Split('/').Last();
+								if (rule.NewField)
+								{
+									if (await firebaseService.IsNodeACollectionAsync(fbRef))
+									{
+										if (!countFiledsFirebase.TryGetValue(fbRef, out int count))
+											countFiledsFirebase[fbRef] = await firebaseService.AddCountFieldToCollectionAsync(fbRef);
+										countFiledsFirebase[fbRef]++;
+									}
+									else
+									{
+										await firebaseService.ConvertFieldToCollectionAsync<string>(fbRef);
+										countFiledsFirebase[fbRef] = 1;
+									}
+
+									int number = Math.Max(0, countFiledsFirebase[fbRef] - 1);
+									await firebaseService.UpdateDataAsync<string>($"{fbRef}/{lastElement}-{number}", data);
+									await firebaseService.UpdateDataAsync<string>($"{fbRef}/count", countFiledsFirebase[fbRef].ToString());
+								}
+								else
+									await firebaseService.UpdateDataAsync<string>(fbRef, data);
+							}
 						};
 					});
 
@@ -201,12 +233,53 @@ namespace MQTT_Rules
 
 							if (rule != null && eMQTT.Payload != null)
 							{
-								FirestorePath path = new FirestorePath(rule.FirebaseReference);
-								var updates = new Dictionary<string, object>
-							{
-								{ path.Field, eMQTT.Payload }
-							};
-								await firestoreService.UpdateDataAsync(path, updates);
+								string data = eMQTT.Payload;
+								if (rule.Timestamp)
+								{
+									data = data.Split('|')[0];
+									data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+								}
+
+								FirestorePath fsPath = new FirestorePath(rule.FirebaseReference);
+								if (rule.NewField)
+								{
+									FirestorePath fsPathNewField = new FirestorePath(rule.FirebaseReference).Shift();
+									if (!fsPath.IsOdd()) //если четный значит док или коллекция
+									{
+										if (!countFiledsFirestore.TryGetValue(fsPathNewField.SourcePath, out int count))
+											countFiledsFirestore[fsPathNewField.SourcePath] = await firestoreService.AddCountFieldToDocumentAsync(fsPathNewField);
+										countFiledsFirestore[fsPathNewField.SourcePath]++;
+									}
+									else
+									{
+										string document = await firestoreService.ConvertFieldToCollectionAsync<string>(fsPath);
+										fsPathNewField = new FirestorePath($"{fsPathNewField.ToString()}/{document}").Shift();
+										rule.FirebaseReference = fsPathNewField.ToString();
+
+
+										countFiledsFirestore[rule.FirebaseReference] = 1;
+									}
+
+									int number = Math.Max(0, countFiledsFirestore[rule.FirebaseReference] - 1);
+									var updatesNewField = new Dictionary<string, object>
+								{
+									{ $"{fsPathNewField.Document}-{number}", data }
+								};
+									await firestoreService.AddDataAsync(fsPathNewField, updatesNewField);
+									var updatesCount = new Dictionary<string, object>
+								{
+									{ $"count", countFiledsFirestore[rule.FirebaseReference] }
+								};
+									await firestoreService.UpdateDataAsync(fsPathNewField, updatesCount);
+								}
+								else
+								{
+									var updates = new Dictionary<string, object>
+								{
+									{ fsPath.Field, data }
+								};
+									await firestoreService.UpdateDataAsync(fsPath, updates);
+								}
 							}
 						};
 					});
@@ -248,10 +321,10 @@ namespace MQTT_Rules
 		//----------------------------------------------------- FIREBASE RULES -----------------------------------------------------
 
 		private static List<RuleControl> ruleControlsFirebase = new List<RuleControl>();
-		private static void AddRuleFirebase(string FirebaseReference, string MQTT_topic, bool Direction)
+		private static void AddRuleFirebase(string FirebaseReference, string MQTT_topic, bool Direction, bool NewField, bool Timestamp)
 		{
 			// Создаем новый элемент управления
-			RuleControl ruleControl = new RuleControl(FirebaseReference, MQTT_topic, Direction);
+			RuleControl ruleControl = new RuleControl(FirebaseReference, MQTT_topic, Direction, NewField, Timestamp);
 			// Добавляем его в список для управления
 			ruleControlsFirebase.Add(ruleControl);
 
@@ -267,10 +340,10 @@ namespace MQTT_Rules
 		//----------------------------------------------------- FIRESTORE RULES -----------------------------------------------------
 
 		private static List<RuleControl> ruleControlsFirestore = new List<RuleControl>();
-		private static void AddRuleFirestore(string FirestoreReference, string MQTT_topic, bool Direction)
+		private static void AddRuleFirestore(string FirebaseReference, string MQTT_topic, bool Direction, bool NewField, bool Timestamp)
 		{
 			// Создаем новый элемент управления
-			RuleControl ruleControl = new RuleControl(FirestoreReference, MQTT_topic, Direction);
+			RuleControl ruleControl = new RuleControl(FirebaseReference, MQTT_topic, Direction, NewField, Timestamp);
 			// Добавляем его в список для управления
 			ruleControlsFirestore.Add(ruleControl);
 

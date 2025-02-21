@@ -40,7 +40,7 @@ namespace MQTT_Rules.FirebaseTools
 		{
 			var collectionRef = _firestoreDb.Collection(path.Path);
 			var documentRef = collectionRef.Document(path.Document);
-			await documentRef.SetAsync(data);
+			await documentRef.SetAsync(data, SetOptions.MergeAll);
 		}
 
 		// Получение данных из документа
@@ -83,8 +83,15 @@ namespace MQTT_Rules.FirebaseTools
 		// Обновление данных в документе
 		public async Task UpdateDataAsync(FirestorePath path, Dictionary<string, object> updates)
 		{
-			var documentRef = _firestoreDb.Collection(path.Path).Document(path.Document);
-			await documentRef.UpdateAsync(updates);
+			try
+			{
+				var documentRef = _firestoreDb.Collection(path.Path).Document(path.Document);
+				await documentRef.UpdateAsync(updates);
+			}
+			catch (Exception ex)
+			{
+				logger.Error($"Error {ex.Message}");
+			}
 		}
 
 		// Удаление документа
@@ -92,6 +99,91 @@ namespace MQTT_Rules.FirebaseTools
 		{
 			var documentRef = _firestoreDb.Collection(path.Path).Document(path.Document);
 			await documentRef.DeleteAsync();
+		}
+
+		public async Task<string> ConvertFieldToCollectionAsync<T>(FirestorePath path)
+		{
+			try
+			{
+				// Генерируем уникальное имя для документа (например, используя GUID)
+				string documentName = Guid.NewGuid().ToString("N"); // Уникальное имя документа
+
+				// Создаем новый объект (документ внутри коллекции)
+				var newDocument = new Dictionary<string, object>
+		{
+			{ "count", "0" } // Добавляем поле count
+        };
+
+				// Записываем новый объект в Firebase по пути path.Path/path.Document/path.Field/documentName
+				var documentReference = _firestoreDb
+					.Collection(path.Path) // Путь к коллекции
+					.Document(path.Document) // Имя документа
+					.Collection(path.Field) // Поле, которое станет коллекцией
+					.Document(documentName); // Уникальное имя документа
+
+				await documentReference.SetAsync(newDocument); // Записываем данные
+
+				// Удаляем исходное поле из документа
+				var parentDocumentReference = _firestoreDb
+					.Collection(path.Path) // Путь к коллекции
+					.Document(path.Document); // Имя документа
+
+				await parentDocumentReference.UpdateAsync(new Dictionary<string, object>
+		{
+			{ path.Field, FieldValue.Delete } // Удаляем поле
+        });
+
+				// Возвращаем имя созданного документа
+				return documentName;
+			}
+			catch (Exception ex)
+			{
+				// Логируем ошибку, если необходимо
+				logger.Error($"Exception: {ex.Message}");
+				throw; // Пробрасываем исключение дальше
+			}
+		}
+
+		public async Task<int> AddCountFieldToDocumentAsync(FirestorePath path)
+		{
+			try
+			{
+				// Получаем ссылку на документ по указанному пути
+				var documentReference = _firestoreDb
+					.Collection(path.Path) // Путь к коллекции
+					.Document(path.Document); // Имя документа
+
+				// Получаем снимок документа
+				var documentSnapshot = await documentReference.GetSnapshotAsync();
+
+				// Если документ существует
+				if (documentSnapshot.Exists)
+				{
+					// Получаем данные документа в виде словаря
+					var data = documentSnapshot.ToDictionary();
+
+					// Считаем количество полей (исключая поле "count", если оно уже есть)
+					int result = data.Keys.Count(k => k != "count");
+
+					// Добавляем или обновляем поле "count" с количеством полей
+					data["count"] = result.ToString();
+
+					// Обновляем документ в Firestore
+					await documentReference.SetAsync(data, SetOptions.MergeAll);
+
+					return result;
+				}
+				else
+				{
+					throw new Exception("Документ не найден по указанному пути.");
+				}
+			}
+			catch (Exception ex)
+			{
+				// Логируем ошибку, если необходимо
+				logger.Error($"Exception: {ex.Message}");
+				throw; // Пробрасываем исключение дальше
+			}
 		}
 
 		// Метод для добавления подписки на изменения документа
@@ -174,71 +266,5 @@ namespace MQTT_Rules.FirebaseTools
 	{
 		public FirestorePath? Path { get; set; }
 		public object? Data { get; set; }
-	}
-
-	public class FirestorePath
-	{
-		private string _sourcePath = string.Empty;
-		private string _path = string.Empty;
-		private string _document = string.Empty;
-		private string _field = string.Empty;
-
-		public string SourcePath => _sourcePath;
-		public string Path => _path;
-		public string Document => _document;
-		public string Field => _field;
-
-		public FirestorePath(string path)
-		{
-			_sourcePath = path;
-
-			// Убираем начальные и конечные слэши
-			if (path.StartsWith("/"))
-				path = path.Substring(1);
-			if (path.EndsWith("/"))
-				path = path.Substring(0, path.Length - 1);
-
-			// Разделяем путь на части
-			string[] pathParts = path.Split('/');
-
-			// Обрабатываем путь в зависимости от количества частей
-			if (pathParts.Length >= 3)
-			{
-				// Если частей 3 или больше:
-				// - path: все части, кроме последних двух
-				// - document: предпоследняя часть
-				// - field: последняя часть
-				_path = string.Join("/", pathParts, 0, pathParts.Length - 2);
-				_document = pathParts[pathParts.Length - 2];
-				_field = pathParts[pathParts.Length - 1];
-			}
-			else if (pathParts.Length == 2)
-			{
-				// Если частей 2:
-				// - path: первая часть (коллекция)
-				// - document: вторая часть (документ)
-				// - field: пусто
-				_path = pathParts[0];
-				_document = pathParts[1];
-				_field = string.Empty;
-			}
-			else if (pathParts.Length == 1)
-			{
-				// Если часть одна:
-				// - path: пусто
-				// - document: пусто
-				// - field: единственная часть
-				_path = string.Empty;
-				_document = string.Empty;
-				_field = pathParts[0];
-			}
-			else
-			{
-				// Если путь пустой
-				_path = string.Empty;
-				_document = string.Empty;
-				_field = string.Empty;
-			}
-		}
 	}
 }

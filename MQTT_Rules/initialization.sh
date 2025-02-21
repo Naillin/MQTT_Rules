@@ -8,21 +8,21 @@ CURRENT_DIR=$(pwd)
 
 # Проверяем, существует ли сервис
 if systemctl list-unit-files | grep -q "^$SERVICE_NAME"; then
-    echo "Service $SERVICE_NAME already exists. Stopping and disabling it..."
-    
-    # Останавливаем сервис
-    sudo systemctl stop $SERVICE_NAME
-    
-    # Отключаем сервис
-    sudo systemctl disable $SERVICE_NAME
-    
-    # Удаляем файл сервиса
-    sudo rm -f /etc/systemd/system/$SERVICE_NAME
-    
-    # Перезагружаем systemd
-    sudo systemctl daemon-reload
-    
-    echo "Service $SERVICE_NAME has been stopped and removed."
+	echo "Service $SERVICE_NAME already exists. Stopping and disabling it..."
+	
+	# Останавливаем сервис
+	sudo systemctl stop $SERVICE_NAME
+	
+	# Отключаем сервис
+	sudo systemctl disable $SERVICE_NAME
+	
+	# Удаляем файл сервиса
+	sudo rm -f /etc/systemd/system/$SERVICE_NAME
+	
+	# Перезагружаем systemd
+	sudo systemctl daemon-reload
+	
+	echo "Service $SERVICE_NAME has been stopped and removed."
 fi
 
 # Создаем содержимое для .service файла

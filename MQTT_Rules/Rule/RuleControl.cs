@@ -44,12 +44,38 @@ namespace MQTT_Rules.Rule
 				_direction = value;
 			}
 		}
+		private bool _newFiled = false;
+		public bool NewField
+		{
+			get
+			{
+				return _newFiled;
+			}
+			set
+			{
+				_newFiled = value;
+			}
+		}
+		private bool _timestamp = false;
+		public bool Timestamp
+		{
+			get
+			{
+				return _timestamp;
+			}
+			set
+			{
+				_timestamp = value;
+			}
+		}
 
-		public RuleControl(string FirebaseReference, string MQTT_topic, bool Direction)
+		public RuleControl(string FirebaseReference, string MQTT_topic, bool Direction, bool NewField, bool Timestamp)
 		{
 			this.FirebaseReference = FirebaseReference;
 			this.MQTT_topic = MQTT_topic;
 			this.Direction = Direction;
+			this.NewField = NewField;
+			this.Timestamp = Timestamp;
 		}
 	}
 }

@@ -1,6 +1,7 @@
 # MQTT Rules Application
 
 [Русская версия](README.ru.md)
+---
 [Windows](https://github.com/Naillin/MQTT_Client.git)
 
 MQTT_Rules is an application that allows you to link Firebase/Firestore fields with MQTT topics using rules.
@@ -25,7 +26,7 @@ MQTT_Rules is an application that allows you to link Firebase/Firestore fields w
 ### Rule Management
 
 Link Firebase/Firestore database fields with MQTT topics. Rules allow automatic synchronization of data between Firebase/Firestore and MQTT. All rules are stored in the root directory in the `rulesFirebase.json`/`rulesFirestore.json` files. (Firebase field paths should start with a `/`, e.g., `/switch1/data`).
-- **Create**: Use the `add_rule.sh` script. Example: `./add_rule.sh fb "path/to/field" ">" "path/to/topic"`. [Script] [fb/fs] [path/to/field] [direction] [path/to/topic]. This means: script, choice of `.json` to interact with, path to the database field, data direction, path to the topic.
+- **Create**: Use the `add_rule.sh` script. Example: `./add_rule.sh fb "path/to/field" ">" "path/to/topic"`. [Script] [fb/fs] [path/to/field] [direction] [path/to/topic] [true/false] [true/false]. That is, the script, the selection of the .json file associated with the interaction, the path to the field in the database, the direction of data movement, the path to the topic, the creation of a new field for new data from the topic, and the timestamp.
 - **List**: Use the `list_rules.sh` script. Example: `./list_rules.sh fb`. [Script] [fb/fs]. This means: script, choice of `.json` to interact with.
 - **Delete**: Use the `delete_rule.sh` script. Example: `./delete_rule.sh fb 1,2`. [Script] [fb/fs] [1.. 1,2,3..]. This means: script, choice of `.json` to interact with, rule number(s) to delete.
 - **Delete All**: Use the `delete_all_rules.sh` script. Example: `./delete_rule.sh`. This script will delete all rules in both `.json` arrays.
@@ -36,12 +37,13 @@ Link Firebase/Firestore database fields with MQTT topics. Rules allow automatic 
 ```bash
 ./create_files.sh
 sudo nano config.ini
-./add_rule.sh fb "switch1/sw1" ">" "switch1/topicSW1"
-./add_rule.sh fb "switch1/sw1" "<" "switch1/topicSW1"
+./add_rule.sh fb "switch1/sw1" ">" "switch1/topicSW1" false false
+./add_rule.sh fb "switch1/sw1" "<" "switch1/topicSW1" false false
 ./initialization.sh
 journalctl -xu mqtt-rules.service
 sudo systemctl stop mqtt-rules.service
 ```
+This snippet demonstrates the creation of a group of rules that implement synchronization between the database field `switch1/sw1` and the topic `switch1/topicSW1`. The code includes: creating the necessary files, configuring the setup, adding rules, starting the daemon, reading logs, and stopping the daemon.
 
 ## License
 

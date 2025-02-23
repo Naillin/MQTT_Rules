@@ -61,13 +61,13 @@ namespace MQTT_Rules
 				parser.WriteFile(filePathConfig, data);
 			}
 
-			configTextDefault = $"ADDRESS = [{ADDRESS}]\r\n" +
-								$"PORT = [{PORT.ToString()}]\r\n" +
-								$"LOGIN = [{LOGIN}]\r\n" +
-								$"PASSWORD = [{PASSWORD}]\n\r" +
-								$"URL_FIREBASE = [{URL_FIREBASE}]\n\r" +
-								$"SECRET_FIREBASE = [{SECRET_FIREBASE}]\n\r" +
-								$"ID_FIRESTORE = [{ID_FIRESTORE}]\n\r" +
+			configTextDefault = $"ADDRESS = [{ADDRESS}]\n" +
+								$"PORT = [{PORT.ToString()}]\n" +
+								$"LOGIN = [{LOGIN}]\n" +
+								$"PASSWORD = [{PASSWORD}]\n" +
+								$"URL_FIREBASE = [{URL_FIREBASE}]\n" +
+								$"SECRET_FIREBASE = [{SECRET_FIREBASE}]\n" +
+								$"ID_FIRESTORE = [{ID_FIRESTORE}]\n" +
 								$"PATH_FIRESTORE = [{PATH_FIRESTORE}]";
 		}
 
@@ -88,6 +88,7 @@ namespace MQTT_Rules
 			else
 			{
 				File.Create(path).Close();
+				File.WriteAllText(path, "[]");
 			}
 		}
 
@@ -122,7 +123,7 @@ namespace MQTT_Rules
 				}
 
 				//MQTTReciverFirebase
-				if (!string.IsNullOrEmpty(p.URL_FIREBASE) && string.IsNullOrEmpty(p.SECRET_FIREBASE))
+				if (!string.IsNullOrEmpty(p.URL_FIREBASE) && !string.IsNullOrEmpty(p.SECRET_FIREBASE))
 				{
 					firebaseService = new FirebaseService(p.URL_FIREBASE, p.SECRET_FIREBASE);
 					mqttReciverClientFirebase = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
@@ -143,37 +144,42 @@ namespace MQTT_Rules
 								rule = rules.FirstOrDefault(r => r.MQTT_topic == eMQTT.Topic);
 							}
 
-							if (rule != null && eMQTT.Payload != null)
+							if (rule != null && !string.IsNullOrEmpty(eMQTT.Payload))
 							{
-								string data = eMQTT.Payload;
-								if (rule.Timestamp)
+								if (!string.IsNullOrEmpty(rule.FirebaseReference))
 								{
-									data = data.Split('|')[0];
-									data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
-								}
-
-								string fbRef = rule.FirebaseReference;
-								string lastElement = fbRef.TrimEnd('/').Split('/').Last();
-								if (rule.NewField)
-								{
-									if (await firebaseService.IsNodeACollectionAsync(fbRef))
+									string data = eMQTT.Payload;
+									if (rule.Timestamp)
 									{
-										if (!countFiledsFirebase.TryGetValue(fbRef, out int count))
-											countFiledsFirebase[fbRef] = await firebaseService.AddCountFieldToCollectionAsync(fbRef);
-										countFiledsFirebase[fbRef]++;
+										data = data.Split('|')[0];
+										data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+									}
+
+									string fbRef = rule.FirebaseReference;
+									string lastElement = fbRef.TrimEnd('/').Split('/').Last();
+									if (rule.NewField)
+									{
+										if (await firebaseService.IsNodeACollectionAsync(fbRef))
+										{
+											if (!countFiledsFirebase.TryGetValue(fbRef, out int count))
+												countFiledsFirebase[fbRef] = await firebaseService.AddCountFieldToCollectionAsync(fbRef);
+											countFiledsFirebase[fbRef]++;
+										}
+										else
+										{
+											await firebaseService.ConvertFieldToCollectionAsync<string>(fbRef);
+											countFiledsFirebase[fbRef] = 1;
+										}
+
+										int number = Math.Max(0, countFiledsFirebase[fbRef] - 1);
+										await firebaseService.UpdateDataAsync<string>($"{fbRef}/{lastElement}-{number}", data);
+										await firebaseService.UpdateDataAsync<string>($"{fbRef}/count", countFiledsFirebase[fbRef].ToString());
 									}
 									else
-									{
-										await firebaseService.ConvertFieldToCollectionAsync<string>(fbRef);
-										countFiledsFirebase[fbRef] = 1;
-									}
-
-									int number = Math.Max(0, countFiledsFirebase[fbRef] - 1);
-									await firebaseService.UpdateDataAsync<string>($"{fbRef}/{lastElement}-{number}", data);
-									await firebaseService.UpdateDataAsync<string>($"{fbRef}/count", countFiledsFirebase[fbRef].ToString());
+										await firebaseService.UpdateDataAsync<string>(fbRef, data);
 								}
 								else
-									await firebaseService.UpdateDataAsync<string>(fbRef, data);
+									logger.Error($"Firebase reference cannot be is empty!");
 							}
 						};
 					});
@@ -190,13 +196,24 @@ namespace MQTT_Rules
 							}
 							foreach (RuleControl rule in rules)
 							{
-								string firebaseData = await firebaseService.GetDataAsync<string>(rule.FirebaseReference);
-								if (!subscriptionsFirebase.TryGetValue(rule.FirebaseReference, out string? oldValue) || oldValue != firebaseData)
+								if (rule != null)
 								{
-									logger.Info($"Message recived: Firebase path: [{rule.FirebaseReference}] Message: [{firebaseData}]");
+									if (!string.IsNullOrEmpty(rule.MQTT_topic))
+									{
+										string firebaseData = await firebaseService.GetDataAsync<string>(rule.FirebaseReference);
+										if (!string.IsNullOrEmpty(firebaseData))
+										{
+											if (!subscriptionsFirebase.TryGetValue(rule.FirebaseReference, out string? oldValue) || oldValue != firebaseData)
+											{
+												logger.Info($"Message recived: Firebase path: [{rule.FirebaseReference}] Message: [{firebaseData}]");
 
-									subscriptionsFirebase[rule.FirebaseReference] = firebaseData;
-									mqttReciverClientFirebase.Publish(rule.MQTT_topic, firebaseData);
+												subscriptionsFirebase[rule.FirebaseReference] = firebaseData;
+												mqttReciverClientFirebase.Publish(rule.MQTT_topic, firebaseData);
+											}
+										}
+									}
+									else
+										logger.Error($"Topic path cannot be is empty!");
 								}
 							}
 
@@ -210,7 +227,7 @@ namespace MQTT_Rules
 				}
 
 				//MQTTReciverFirestore
-				if (!string.IsNullOrEmpty(p.ID_FIRESTORE) && string.IsNullOrEmpty(p.PATH_FIRESTORE))
+				if (!string.IsNullOrEmpty(p.ID_FIRESTORE) && !string.IsNullOrEmpty(p.PATH_FIRESTORE))
 				{
 					firestoreService = new FirestoreService(p.ID_FIRESTORE, p.PATH_FIRESTORE);
 					mqttReciverClientFirestore = new MqttBrokerClient(p.ADDRESS, p.PORT, p.LOGIN, p.PASSWORD);
@@ -231,55 +248,60 @@ namespace MQTT_Rules
 								rule = rules.FirstOrDefault(r => r.MQTT_topic == eMQTT.Topic);
 							}
 
-							if (rule != null && eMQTT.Payload != null)
+							if (rule != null && !string.IsNullOrEmpty(eMQTT.Payload))
 							{
-								string data = eMQTT.Payload;
-								if (rule.Timestamp)
+								if (!string.IsNullOrEmpty(rule.FirebaseReference))
 								{
-									data = data.Split('|')[0];
-									data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
-								}
-
-								FirestorePath fsPath = new FirestorePath(rule.FirebaseReference);
-								if (rule.NewField)
-								{
-									FirestorePath fsPathNewField = new FirestorePath(rule.FirebaseReference).Shift();
-									if (!fsPath.IsOdd()) //если четный значит док или коллекция
+									string data = eMQTT.Payload;
+									if (rule.Timestamp)
 									{
-										if (!countFiledsFirestore.TryGetValue(fsPathNewField.SourcePath, out int count))
-											countFiledsFirestore[fsPathNewField.SourcePath] = await firestoreService.AddCountFieldToDocumentAsync(fsPathNewField);
-										countFiledsFirestore[fsPathNewField.SourcePath]++;
+										data = data.Split('|')[0];
+										data += $"|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+									}
+
+									FirestorePath fsPath = new FirestorePath(rule.FirebaseReference);
+									if (rule.NewField)
+									{
+										FirestorePath fsPathNewField = new FirestorePath(rule.FirebaseReference).Shift();
+										if (!fsPath.IsOdd()) //если четный значит док или коллекция
+										{
+											if (!countFiledsFirestore.TryGetValue(fsPathNewField.SourcePath, out int count))
+												countFiledsFirestore[fsPathNewField.SourcePath] = await firestoreService.AddCountFieldToDocumentAsync(fsPathNewField);
+											countFiledsFirestore[fsPathNewField.SourcePath]++;
+										}
+										else
+										{
+											string document = await firestoreService.ConvertFieldToCollectionAsync<string>(fsPath);
+											fsPathNewField = new FirestorePath($"{fsPathNewField.ToString()}/{document}").Shift();
+											rule.FirebaseReference = fsPathNewField.ToString();
+											WriteInJSON(filePathFirestoreRules, ruleControlsFirestore.ToList()); //так как путь изменился нужно записать новый (перезапись файла fs-правил)
+
+											countFiledsFirestore[rule.FirebaseReference] = 1;
+										}
+
+										int number = Math.Max(0, countFiledsFirestore[rule.FirebaseReference] - 1);
+										var updatesNewField = new Dictionary<string, object>
+										{
+											{ $"{fsPathNewField.Document}-{number}", data }
+										};
+										await firestoreService.AddDataAsync(fsPathNewField, updatesNewField);
+										var updatesCount = new Dictionary<string, object>
+										{
+											{ $"count", countFiledsFirestore[rule.FirebaseReference] }
+										};
+										await firestoreService.UpdateDataAsync(fsPathNewField, updatesCount);
 									}
 									else
 									{
-										string document = await firestoreService.ConvertFieldToCollectionAsync<string>(fsPath);
-										fsPathNewField = new FirestorePath($"{fsPathNewField.ToString()}/{document}").Shift();
-										rule.FirebaseReference = fsPathNewField.ToString();
-
-
-										countFiledsFirestore[rule.FirebaseReference] = 1;
+										var updates = new Dictionary<string, object>
+										{
+											{ fsPath.Field, data }
+										};
+										await firestoreService.UpdateDataAsync(fsPath, updates);
 									}
-
-									int number = Math.Max(0, countFiledsFirestore[rule.FirebaseReference] - 1);
-									var updatesNewField = new Dictionary<string, object>
-								{
-									{ $"{fsPathNewField.Document}-{number}", data }
-								};
-									await firestoreService.AddDataAsync(fsPathNewField, updatesNewField);
-									var updatesCount = new Dictionary<string, object>
-								{
-									{ $"count", countFiledsFirestore[rule.FirebaseReference] }
-								};
-									await firestoreService.UpdateDataAsync(fsPathNewField, updatesCount);
 								}
 								else
-								{
-									var updates = new Dictionary<string, object>
-								{
-									{ fsPath.Field, data }
-								};
-									await firestoreService.UpdateDataAsync(fsPath, updates);
-								}
+									logger.Error($"Firebase reference cannot be is empty!");
 							}
 						};
 					});
@@ -289,7 +311,7 @@ namespace MQTT_Rules
 					{
 						firestoreService.OnMessage += (senderFirestore, eFirestore) =>
 						{
-							if (eFirestore.Path != null && eFirestore.Data != null)
+							if (eFirestore.Path != null && eFirestore.Data != null && !string.IsNullOrEmpty(eFirestore.Data.ToString()))
 							{
 								logger.Info($"Message recived: Firestore path: [{eFirestore.Path.SourcePath}] Message: [{eFirestore.Data.ToString()}]");
 
@@ -301,7 +323,14 @@ namespace MQTT_Rules
 								RuleControl? rule = rules.FirstOrDefault(r => r.FirebaseReference == eFirestore.Path.SourcePath);
 
 								if (rule != null)
-									mqttReciverClientFirestore.Publish(rule.MQTT_topic, eFirestore.Data.ToString()!);
+								{
+									if (!string.IsNullOrEmpty(rule.MQTT_topic))
+									{
+										mqttReciverClientFirestore.Publish(rule.MQTT_topic, eFirestore.Data.ToString()!);
+									}
+									else
+										logger.Error($"Topic path cannot be is empty!");
+								}
 							}
 						};
 					});
@@ -328,7 +357,7 @@ namespace MQTT_Rules
 			// Добавляем его в список для управления
 			ruleControlsFirebase.Add(ruleControl);
 
-			if (mqttReciverClientFirebase != null && firestoreService != null)
+			if (mqttReciverClientFirebase != null && firebaseService != null)
 			{
 				if (ruleControl.Direction)
 					mqttReciverClientFirebase.Subscribe(ruleControl.MQTT_topic);
@@ -361,6 +390,19 @@ namespace MQTT_Rules
 		}
 
 		//----------------------------------------------------- SYSTEM -----------------------------------------------------
+
+		private static void WriteInJSON(string path, List<RuleControl> ruleControls)
+		{
+			List<RuleUnit> ruleUnits = new List<RuleUnit>();
+			foreach (RuleControl rule in ruleControls)
+			{
+				ruleUnits.Add(new RuleUnit(rule.FirebaseReference, rule.MQTT_topic, rule.Direction, rule.NewField, rule.Timestamp));
+			}
+			// Сериализуем список в JSON
+			string json = JsonConvert.SerializeObject(ruleUnits, Formatting.Indented);
+			// Записываем JSON в файл
+			File.WriteAllText(path, json);
+		}
 
 		private static void DisconnectAll()
 		{

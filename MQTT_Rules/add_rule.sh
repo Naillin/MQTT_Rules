@@ -23,13 +23,17 @@ if [ "$NEW_FIELD" != "true" ] && [ "$TIMESTAMP" == "true" ]; then
 fi
 
 # Преобразование стрелки направления в true/false
-if [ "$DIRECTION_ARROW" == ">" ]; then
-	DIRECTION="false"
-elif [ "$DIRECTION_ARROW" == "<" ]; then
-	DIRECTION="true"
+if [ "$NEW_FIELD" == "true" ]; then
+	DIRECTION="true"  # Если NewField = true, направление всегда true
 else
-	echo "Invalid direction. Use '>' or '<'."
-	exit 1
+	if [ "$DIRECTION_ARROW" == ">" ]; then
+		DIRECTION="false"
+	elif [ "$DIRECTION_ARROW" == "<" ]; then
+		DIRECTION="true"
+	else
+		echo "Invalid direction. Use '>' or '<'."
+		exit 1
+	fi
 fi
 
 # Выбор файла в зависимости от типа

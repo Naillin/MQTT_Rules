@@ -41,7 +41,7 @@ namespace MQTT_Rules
 				PORT = Convert.ToInt32(data["Settings"]["PORT"]);
 				LOGIN = data["Settings"]["LOGIN"];
 				PASSWORD = data["Settings"]["PASSWORD"];
-				URL_FIREBASE = data["Settings"]["URL_FIREBASE"];
+				URL_FIREBASE = data["Settings"]["URL_FIREBASE"].Trim('/');
 				SECRET_FIREBASE = data["Settings"]["SECRET_FIREBASE"];
 				ID_FIRESTORE = data["Settings"]["ID_FIRESTORE"];
 				PATH_FIRESTORE = data["Settings"]["PATH_FIRESTORE"];
@@ -81,7 +81,7 @@ namespace MQTT_Rules
 				{
 					foreach (RuleUnit rule in jsonRules)
 					{
-						AddRule(rule.FirebaseReference, rule.MQTT_topic, rule.Direction, rule.NewField, rule.Timestamp);
+						AddRule(rule.FirebaseReference.Trim('/'), rule.MQTT_topic.Trim('/'), rule.Direction, rule.NewField, rule.Timestamp);
 					}
 				}
 			}
